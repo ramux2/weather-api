@@ -1,35 +1,37 @@
 from flask import Flask, jsonify
 import requests
-import time
+import redis
+import json
 
 app = Flask(__name__)
 
-# Cache simples: { city_name: (response_data, timestamp) }
-cache = {}
-CACHE_TTL = 60  # segundos
+# Configura conexão com o Redis (localhost, porta padrão)
+cache = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+
+# Tempo de vida do cache (em segundos)
+CACHE_TTL = 60
 
 API_B_URL = 'http://localhost:5001/weather/'
 
 @app.route('/recommendation/<city>', methods=['GET'])
 def get_recommendation(city):
-    now = time.time()
-    
-    # Verifica cache
-    if city in cache:
-        data, timestamp = cache[city]
-        if now - timestamp < CACHE_TTL:
-            return jsonify(data)
-    
+    city_key = city.lower()
+
+    # Verifica se a cidade está no cache Redis
+    cached_data = cache.get(city_key)
+    if cached_data:
+        return jsonify(json.loads(cached_data))
+
     # Consulta API B
     try:
         response = requests.get(f"{API_B_URL}{city}")
         if response.status_code != 200:
             return jsonify({"error": "Cidade não encontrada na API B"}), 404
-        
+
         weather = response.json()
         temp = weather["temp"]
 
-        # Lógica de recomendação
+        # Gera a recomendação
         if temp > 30:
             recommendation = "Está muito quente! Hidrate-se e use protetor solar."
         elif 15 < temp <= 30:
@@ -44,8 +46,8 @@ def get_recommendation(city):
             "recommendation": recommendation
         }
 
-        # Atualiza cache
-        cache[city] = (result, now)
+        # Armazena no Redis com tempo de expiração
+        cache.setex(city_key, CACHE_TTL, json.dumps(result))
 
         return jsonify(result)
 
